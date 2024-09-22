@@ -11,6 +11,7 @@ import Sharp from 'sharp';
 const s3Client = new S3Client({
   region: 'eu-west-2',
 });
+
 const S3_ORIGINAL_IMAGE_BUCKET = process.env.originalImageBucketName;
 const S3_TRANSFORMED_IMAGE_BUCKET = process.env.transformedImageBucketName;
 const TRANSFORMED_IMAGE_CACHE_TTL = process.env.transformedImageCacheTTL;
@@ -142,7 +143,8 @@ export const handler = async (event) => {
         ContentType: contentType,
         CacheControl: TRANSFORMED_IMAGE_CACHE_TTL,
       });
-      await s3Client.send(putImageCommand);
+      const putImageClient = new S3Client({ region: 'us-east-1' });
+      await putImageClient.send(putImageCommand);
       timingLog =
         timingLog +
         ',img-upload;dur=' +
