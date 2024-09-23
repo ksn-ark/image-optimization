@@ -13,6 +13,7 @@ const s3Client = new S3Client({
 });
 
 const S3_ORIGINAL_IMAGE_BUCKET = process.env.originalImageBucketName;
+const S3_ASSETS_BUCKET = process.env.assetsBucketName;
 const S3_TRANSFORMED_IMAGE_BUCKET = process.env.transformedImageBucketName;
 const TRANSFORMED_IMAGE_CACHE_TTL = process.env.transformedImageCacheTTL;
 const MAX_IMAGE_SIZE = parseInt(process.env.maxImageSize);
@@ -37,6 +38,16 @@ export const handler = async (event) => {
   // Downloading original image
   let originalImageBody;
   let contentType;
+  let frameImageBodyPromise;
+
+  const operationsJSON = Object.fromEntries(
+    operationsPrefix.split(',').map((operation) => operation.split('=')),
+  );
+
+  if (operationsJSON['frame']) {
+    frameImageBodyPromise = getFrame(operationsJSON['frame']);
+  }
+
   try {
     const getOriginalImageCommand = new GetObjectCommand({
       Bucket: S3_ORIGINAL_IMAGE_BUCKET,
@@ -69,9 +80,6 @@ export const handler = async (event) => {
   // Get image orientation to rotate if needed
   const imageMetadata = await transformedImage.metadata();
   // execute the requested operations
-  const operationsJSON = Object.fromEntries(
-    operationsPrefix.split(',').map((operation) => operation.split('=')),
-  );
   // variable holding the server timing header value
   var timingLog = 'img-download;dur=' + parseInt(performance.now() - startTime);
   startTime = performance.now();
@@ -82,8 +90,7 @@ export const handler = async (event) => {
       resizingOptions.width = parseInt(operationsJSON['width']);
     if (operationsJSON['height'])
       resizingOptions.height = parseInt(operationsJSON['height']);
-    if (resizingOptions)
-      transformedImage = transformedImage.resize(resizingOptions);
+
     // check if rotation is needed
     if (imageMetadata.orientation) transformedImage = transformedImage.rotate();
     // check if formatting is requested
@@ -121,6 +128,25 @@ export const handler = async (event) => {
     } else {
       /// If not format is precised, Sharp converts svg to png by default https://github.com/aws-samples/image-optimization/issues/48
       if (contentType === 'image/svg+xml') contentType = 'image/png';
+    }
+
+    const frameImageBody = await frameImageBodyPromise;
+
+    transformedImage = transformedImage.resize(resizingOptions);
+
+    if (frameImageBody) {
+      let frameImage = Sharp(frameImageBody, {
+        failOn: 'none',
+        animated: true,
+      });
+
+      if (resizingOptions) {
+        frameImage = frameImage.resize(resizingOptions);
+      }
+      transformedImage = transformedImage.composite([
+        { input: await frameImage.toBuffer() },
+      ]);
+      console.log('compositing complete');
     }
     transformedImage = await transformedImage.toBuffer();
   } catch (error) {
@@ -184,6 +210,21 @@ export const handler = async (event) => {
       },
     };
 };
+
+async function getFrame(frame) {
+  try {
+    const getFrameImageCommand = new GetObjectCommand({
+      Bucket: S3_ASSETS_BUCKET,
+      Key: 'frames/' + frame,
+    });
+    const getFrameImageCommandOutput =
+      await s3Client.send(getFrameImageCommand);
+    console.log('got frame');
+    return getFrameImageCommandOutput.Body.transformToByteArray();
+  } catch (error) {
+    return undefined;
+  }
+}
 
 function sendError(statusCode, body, error) {
   logError(body, error);

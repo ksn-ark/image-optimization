@@ -7,7 +7,6 @@ import {
   StackProps,
   RemovalPolicy,
   aws_s3 as s3,
-  aws_s3_deployment as s3deploy,
   aws_cloudfront as cloudfront,
   aws_cloudfront_origins as origins,
   aws_lambda as lambda,
@@ -26,6 +25,7 @@ import { getOriginShieldRegion } from './origin-shield';
 var STORE_TRANSFORMED_IMAGES = 'true';
 // Parameters of S3 bucket where original images are stored
 var S3_IMAGE_BUCKET_NAME: string = 'mazoku-cdn';
+var S3_ASSETS_BUCKET_NAME: string = 'mazoku-assets';
 // CloudFront parameters
 var CLOUDFRONT_ORIGIN_SHIELD_REGION = getOriginShieldRegion(
   process.env.AWS_REGION || process.env.CDK_DEFAULT_REGION || 'us-east-1',
@@ -53,6 +53,7 @@ type ImageDeliveryCacheBehaviorConfig = {
 
 type LambdaEnv = {
   originalImageBucketName: string;
+  assetsBucketName: string;
   transformedImageBucketName?: any;
   transformedImageCacheTTL: string;
   maxImageSize: string;
@@ -88,103 +89,45 @@ export class ImageOptimizationStack extends Stack {
     DEPLOY_SAMPLE_WEBSITE =
       this.node.tryGetContext('DEPLOY_SAMPLE_WEBSITE') || DEPLOY_SAMPLE_WEBSITE;
 
-    // deploy a sample website for testing if required
-    if (DEPLOY_SAMPLE_WEBSITE === 'true') {
-      var sampleWebsiteBucket = new s3.Bucket(
-        this,
-        's3-sample-website-bucket',
-        {
-          removalPolicy: RemovalPolicy.DESTROY,
-          blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-          encryption: s3.BucketEncryption.S3_MANAGED,
-          enforceSSL: true,
-          autoDeleteObjects: true,
-        },
-      );
-
-      var sampleWebsiteDelivery = new cloudfront.Distribution(
-        this,
-        'websiteDeliveryDistribution',
-        {
-          comment: 'image optimization - sample website',
-          defaultRootObject: 'index.html',
-          defaultBehavior: {
-            origin: new origins.S3Origin(sampleWebsiteBucket),
-            viewerProtocolPolicy:
-              cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          },
-        },
-      );
-
-      new CfnOutput(this, 'SampleWebsiteDomain', {
-        description: 'Sample website domain',
-        value: sampleWebsiteDelivery.distributionDomainName,
-      });
-      new CfnOutput(this, 'SampleWebsiteS3Bucket', {
-        description: 'S3 bucket use by the sample website',
-        value: sampleWebsiteBucket.bucketName,
-      });
-    }
-
     // For the bucket having original images, either use an external one, or create one with some samples photos.
-    var originalImageBucket;
-    var transformedImageBucket;
 
-    if (S3_IMAGE_BUCKET_NAME) {
-      originalImageBucket = s3.Bucket.fromBucketName(
-        this,
-        'imported-original-image-bucket',
-        S3_IMAGE_BUCKET_NAME,
-      );
-      new CfnOutput(this, 'OriginalImagesS3Bucket', {
-        description: 'S3 bucket where original images are stored',
-        value: originalImageBucket.bucketName,
-      });
-    } else {
-      originalImageBucket = new s3.Bucket(
-        this,
-        's3-sample-original-image-bucket',
-        {
-          removalPolicy: RemovalPolicy.DESTROY,
-          blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-          encryption: s3.BucketEncryption.S3_MANAGED,
-          enforceSSL: true,
-          autoDeleteObjects: true,
-        },
-      );
-      new s3deploy.BucketDeployment(this, 'DeployWebsite', {
-        sources: [s3deploy.Source.asset('./image-sample')],
-        destinationBucket: originalImageBucket,
-        destinationKeyPrefix: 'images/rio/',
-      });
-      new CfnOutput(this, 'OriginalImagesS3Bucket', {
-        description: 'S3 bucket where original images are stored',
-        value: originalImageBucket.bucketName,
-      });
-    }
+    const originalImageBucket = s3.Bucket.fromBucketName(
+      this,
+      'imported-original-image-bucket',
+      S3_IMAGE_BUCKET_NAME,
+    );
+    new CfnOutput(this, 'OriginalImagesS3Bucket', {
+      description: 'S3 bucket where original images are stored',
+      value: originalImageBucket.bucketName,
+    });
 
-    // create bucket for transformed images if enabled in the architecture
-    if (STORE_TRANSFORMED_IMAGES === 'true') {
-      transformedImageBucket = new s3.Bucket(
-        this,
-        's3-transformed-image-bucket',
-        {
-          removalPolicy: RemovalPolicy.DESTROY,
-          autoDeleteObjects: true,
-          lifecycleRules: [
-            {
-              expiration: Duration.days(
-                parseInt(S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION),
-              ),
-            },
-          ],
-        },
-      );
-    }
+    // create bucket for transformed images
+    const transformedImageBucket = new s3.Bucket(
+      this,
+      's3-transformed-image-bucket',
+      {
+        removalPolicy: RemovalPolicy.DESTROY,
+        autoDeleteObjects: true,
+        lifecycleRules: [
+          {
+            expiration: Duration.days(
+              parseInt(S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION),
+            ),
+          },
+        ],
+      },
+    );
+
+    const assetsBucket = s3.Bucket.fromBucketName(
+      this,
+      'imported-assets-bucket',
+      S3_ASSETS_BUCKET_NAME,
+    );
 
     // prepare env variable for Lambda
     var lambdaEnv: LambdaEnv = {
       originalImageBucketName: originalImageBucket.bucketName,
+      assetsBucketName: assetsBucket.bucketName,
       transformedImageCacheTTL: S3_TRANSFORMED_IMAGE_CACHE_TTL,
       maxImageSize: MAX_IMAGE_SIZE,
     };
@@ -197,8 +140,13 @@ export class ImageOptimizationStack extends Stack {
       resources: ['arn:aws:s3:::' + originalImageBucket.bucketName + '/*'],
     });
 
+    const s3ReadAssetsPolicy = new iam.PolicyStatement({
+      actions: ['s3:GetObject'],
+      resources: ['arn:aws:s3:::' + assetsBucket.bucketName + '/*'],
+    });
+
     // statements of the IAM policy to attach to Lambda
-    var iamPolicyStatements = [s3ReadOriginalImagesPolicy];
+    var iamPolicyStatements = [s3ReadOriginalImagesPolicy, s3ReadAssetsPolicy];
 
     // Create Lambda for image processing
     var lambdaProps = {
@@ -227,34 +175,27 @@ export class ImageOptimizationStack extends Stack {
     // Create a CloudFront origin: S3 with fallback to Lambda when image needs to be transformed, otherwise with Lambda as sole origin
     var imageOrigin;
 
-    if (transformedImageBucket) {
-      imageOrigin = new origins.OriginGroup({
-        primaryOrigin: new origins.S3Origin(transformedImageBucket, {
-          originShieldRegion: CLOUDFRONT_ORIGIN_SHIELD_REGION,
-        }),
-        fallbackOrigin: new origins.HttpOrigin(imageProcessingDomainName, {
-          originShieldRegion: CLOUDFRONT_ORIGIN_SHIELD_REGION,
-        }),
-        fallbackStatusCodes: [403, 500, 503, 504],
-      });
-
-      // write policy for Lambda on the s3 bucket for transformed images
-      var s3WriteTransformedImagesPolicy = new iam.PolicyStatement({
-        actions: ['s3:PutObject'],
-        resources: ['arn:aws:s3:::' + transformedImageBucket.bucketName + '/*'],
-      });
-      var s3ListBucketTransformedImagesPolicy = new iam.PolicyStatement({
-        actions: ['s3:ListBucket'],
-        resources: ['arn:aws:s3:::' + originalImageBucket.bucketName],
-      });
-      iamPolicyStatements.push(s3WriteTransformedImagesPolicy);
-      iamPolicyStatements.push(s3ListBucketTransformedImagesPolicy);
-    } else {
-      imageOrigin = new origins.HttpOrigin(imageProcessingDomainName, {
+    imageOrigin = new origins.OriginGroup({
+      primaryOrigin: new origins.S3Origin(transformedImageBucket, {
         originShieldRegion: CLOUDFRONT_ORIGIN_SHIELD_REGION,
-      });
-    }
+      }),
+      fallbackOrigin: new origins.HttpOrigin(imageProcessingDomainName, {
+        originShieldRegion: CLOUDFRONT_ORIGIN_SHIELD_REGION,
+      }),
+      fallbackStatusCodes: [403, 500, 503, 504],
+    });
 
+    // write policy for Lambda on the s3 bucket for transformed images
+    var s3WriteTransformedImagesPolicy = new iam.PolicyStatement({
+      actions: ['s3:PutObject'],
+      resources: ['arn:aws:s3:::' + transformedImageBucket.bucketName + '/*'],
+    });
+    var s3ListBucketTransformedImagesPolicy = new iam.PolicyStatement({
+      actions: ['s3:ListBucket'],
+      resources: ['arn:aws:s3:::' + originalImageBucket.bucketName],
+    });
+    iamPolicyStatements.push(s3WriteTransformedImagesPolicy);
+    iamPolicyStatements.push(s3ListBucketTransformedImagesPolicy);
     // attach iam policy to the role assumed by Lambda
     imageProcessing.role?.attachInlinePolicy(
       new iam.Policy(this, 'read-write-bucket-policy', {
