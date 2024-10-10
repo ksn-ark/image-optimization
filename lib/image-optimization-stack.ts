@@ -25,7 +25,7 @@ import { getOriginShieldRegion } from './origin-shield';
 var STORE_TRANSFORMED_IMAGES = 'true';
 // Parameters of S3 bucket where original images are stored
 var S3_IMAGE_BUCKET_NAME: string = 'mazoku-cdn';
-var S3_ASSETS_BUCKET_NAME: string = 'mazoku-assets';
+var S3_ASSETS_BUCKET_NAME: string = 'cdn-private';
 // CloudFront parameters
 var CLOUDFRONT_ORIGIN_SHIELD_REGION = getOriginShieldRegion(
   process.env.AWS_REGION || process.env.CDK_DEFAULT_REGION || 'us-east-1',
@@ -36,7 +36,7 @@ var S3_TRANSFORMED_IMAGE_EXPIRATION_DURATION = '90';
 var S3_TRANSFORMED_IMAGE_CACHE_TTL = 'max-age=31622400';
 // Max image size in bytes. If generated images are stored on S3, bigger images are generated, stored on S3
 // and request is redirect to the generated image. Otherwise, an application error is sent.
-var MAX_IMAGE_SIZE = '4700000';
+var MAX_IMAGE_SIZE = '50000000';
 // Lambda Parameters
 var LAMBDA_MEMORY = '1500';
 var LAMBDA_TIMEOUT = '60';
@@ -269,20 +269,6 @@ export class ImageOptimizationStack extends Stack {
       {
         comment: 'image optimization - image delivery',
         defaultBehavior: imageDeliveryCacheBehaviorConfig,
-        errorResponses: [
-          {
-            httpStatus: 403,
-            responsePagePath: '/cards/default.png/original',
-            responseHttpStatus: 200,
-            ttl: Duration.seconds(10),
-          },
-          {
-            httpStatus: 404,
-            responsePagePath: '/cards/default.png/original',
-            responseHttpStatus: 200,
-            ttl: Duration.seconds(10),
-          },
-        ],
       },
     );
 
