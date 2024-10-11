@@ -16,8 +16,6 @@ import ffmpegPath from 'ffmpeg-static';
 import { spawn } from 'child_process';
 import { resolve } from 'path';
 
-const TEMP_DIR = '/tmp/';
-
 const S3_ORIGINAL_IMAGE_BUCKET = process.env.originalImageBucketName;
 const S3_ASSETS_BUCKET = process.env.assetsBucketName;
 const S3_TRANSFORMED_IMAGE_BUCKET = process.env.transformedImageBucketName;

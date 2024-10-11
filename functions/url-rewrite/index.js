@@ -65,6 +65,7 @@ function handler(event) {
             );
             normalizedOperations['frame'] = frame.toString();
           }
+          break;
         default:
           break;
       }
